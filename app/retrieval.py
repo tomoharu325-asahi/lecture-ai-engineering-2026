@@ -17,7 +17,7 @@ import sqlite_vec
 from app.config import (
     EMBEDDING_DIMENSIONS, EMBEDDING_MAX_TOKENS, EMBEDDING_MODEL,
     RAG_DB, RAG_DOCUMENT_IDS, RAG_SOURCE, RAG_TOP_K, RAG_TREE, get_api_key,
-    RAG_GRAPH, GRAPH_START_K, GRAPH_HOPS, GRAPH_MAX_RESULTS,
+    RAG_GRAPH, GRAPH_START_K, GRAPH_HOPS, GRAPH_MAX_RESULTS, GRAPH_QUERY_FOCUS,
 )
 
 
@@ -151,6 +151,13 @@ def search_graph(query: str) -> dict:
             adjacent[a].add(b)
             adjacent[b].add(a)
 
+    words = [w.lower() for w in query.split()]
+    if GRAPH_QUERY_FOCUS:
+        # 質問の語に当たる用語だけを経由する
+        q = query.lower()
+        nodes = {i: n for i, n in nodes.items() if n["kind"] != "term"
+                 or any(a.lower() in q for a in [n["title"], *n.get("aliases", [])])}
+        adjacent = defaultdict(set, {i: ns & nodes.keys() for i, ns in adjacent.items() if i in nodes})
     seeds = [hit for hit in search(query) if hit["page_id"] in pages][:min(GRAPH_START_K, GRAPH_MAX_RESULTS)]
     seed_ids = {seed["page_id"] for seed in seeds}
     results, candidates = [], {}
@@ -176,6 +183,11 @@ def search_graph(query: str) -> dict:
                     continue
                 frequency = max((len(adjacent[n]) for n in route if nodes[n]["kind"] == "term"), default=0)
                 priority = (len(route) - 1, frequency, rank, neighbor)
+                if GRAPH_QUERY_FOCUS:
+                    # 質問の語を多く含むページを先にする（題名に出る語は2倍）
+                    page = pages[neighbor]
+                    score = sum((w in page["content"].lower()) + (w in page["title"].lower()) for w in words)
+                    priority = (-score, *priority)
                 candidate = {**pages[neighbor], "hops": len(route) - 1,
                              "path": [{"id": n, "title": nodes[n]["title"]} for n in route]}
                 if neighbor not in candidates or priority < candidates[neighbor][0]:
